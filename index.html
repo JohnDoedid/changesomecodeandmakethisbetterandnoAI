@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TV Emulator — RF Signal Corruption</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box;}
+    body{background:#000;color:#ccc;font-family:'Inter',sans-serif;height:100vh;display:flex;flex-direction:column;align-items:center;overflow:hidden;user-select:none;}
+    #stream-bar{margin-top:10px;display:flex;gap:8px;z-index:10;flex-wrap:wrap;align-items:center;justify-content:center;padding:0 12px;}
+    #stream-bar input{padding:6px 10px;width:200px;background:#1a1a1a;border:1px solid #333;color:#fff;font-family:'Inter',sans-serif;border-radius:4px;font-size:0.75em;outline:none;}
+    #stream-bar button{padding:6px 12px;background:#222;border:1px solid #444;color:#aaa;border-radius:4px;cursor:pointer;font-family:'Inter',sans-serif;font-size:0.75em;}
+    #stream-bar button:hover{background:#333;color:#fff;}
+    #recordBtn{background:#400!important;border-color:#f44!important;color:#f44!important;font-weight:600;}
+    #recordBtn.recording{animation:rec-blink 1s infinite;}
+    @keyframes rec-blink{50%{opacity:0.4;}}
+    #main-layout{display:flex;width:100%;flex:1;align-items:flex-start;justify-content:center;gap:12px;padding:12px;overflow-y:auto;margin-top:4px;}
+    .panel{width:280px;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:6px;padding:10px;max-height:calc(100vh - 150px);overflow-y:auto;flex-shrink:0;font-size:0.7em;}
+    .panel::-webkit-scrollbar{width:4px;}
+    .panel::-webkit-scrollbar-track{background:#000;}
+    .panel::-webkit-scrollbar-thumb{background:#333;border-radius:2px;}
+    .panel h3{font-size:0.8em;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px;color:#00e673;border-bottom:1px solid #222;padding-bottom:4px;}
+    .slider-group{margin-bottom:10px;}
+    .slider-group label{display:flex;justify-content:space-between;font-size:0.7em;color:#888;margin-bottom:2px;}
+    .slider-group label span.val{color:#0f0;font-weight:500;min-width:28px;text-align:right;}
+    input[type="range"]{-webkit-appearance:none;width:100%;height:3px;background:#1a1a1a;border-radius:2px;outline:none;cursor:pointer;}
+    input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#00e673;cursor:pointer;border:1px solid #000;}
+    select{background:#1a1a1a;border:1px solid #333;color:#aaa;font-size:0.65em;padding:2px 4px;border-radius:3px;width:100%;margin-bottom:4px;}
+    .inline-row{display:flex;gap:4px;align-items:center;font-size:0.6em;color:#555;}
+    .inline-row input{flex:1;}
+    .center-block{display:flex;flex-direction:column;align-items:center;gap:8px;flex-shrink:0;}
+    .canvas-frame{position:relative;border:1px solid #1e1e1e;border-radius:4px;overflow:hidden;background:#000;width:640px;height:360px;display:flex;align-items:center;justify-content:center;}
+    canvas{display:block;width:100%;height:100%;image-rendering:auto;}
+    .mode-tag{position:absolute;top:8px;right:8px;background:rgba(0,0,0,0.8);color:#ff3b7f;font-size:0.65em;padding:2px 8px;border-radius:8px;border:1px solid #ff3b7f;pointer-events:none;opacity:0;transition:opacity 0.3s;}
+    .mode-tag.active{opacity:1;}
+    .mode-selector{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;}
+    .mode-selector button{padding:4px 10px;font-size:0.65em;background:#111;border:1px solid #333;color:#777;border-radius:4px;cursor:pointer;font-family:'Inter',sans-serif;transition:all 0.2s;}
+    .mode-selector button.active-mode{background:#1a2a1a;border-color:#00e673;color:#00e673;box-shadow:0 0 6px rgba(0,230,115,0.3);}
+    #startOverlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.9);display:flex;align-items:center;justify-content:center;z-index:100;cursor:pointer;flex-direction:column;}
+    #startOverlay span{font-size:1.5em;letter-spacing:0.1em;color:#0f0;}
+    #startOverlay small{color:#555;margin-top:8px;}
+    video{display:none;}
+    .btn-hack{background:#1a1a2a;border:1px solid #44f;color:#88f;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:0.6em;margin-right:4px;}
+  </style>
+</head>
+<body>
+<div id="startOverlay"><span>START TV EMULATOR</span><small>click to enable audio & stream</small></div>
+
+<div id="stream-bar">
+  <input type="text" id="m3uUrlA" value="https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8" placeholder="Channel A M3U8">
+  <button id="loadStreamBtnA">Load A</button>
+  <input type="text" id="m3uUrlB" placeholder="Channel B M3U8 or 'webcam'" value="">
+  <button id="loadStreamBtnB">Load B</button>
+  <button id="recordBtn">● REC</button>
+</div>
+
+<div id="main-layout">
+  <!-- LEFT PANEL -->
+  <div class="panel" id="leftPanel">
+    <h3>Pixel Array Ops</h3>
+    <div class="slider-group"><label>Pixel Offset X <span class="val" id="v_pixelOffsetX">0</span></label><input type="range" min="0" max="200" value="0" id="pixelOffsetX"></div>
+    <div class="slider-group"><label>Pixel Offset Y <span class="val" id="v_pixelOffsetY">0</span></label><input type="range" min="0" max="200" value="0" id="pixelOffsetY"></div>
+    <select id="scrollDir"><option value="none">No Auto-Scroll</option><option value="right">Scroll Right</option><option value="left">Scroll Left</option><option value="down">Scroll Down</option><option value="up">Scroll Up</option></select>
+    <div class="slider-group"><label>Pixel Hold Div <span class="val" id="v_pixelHoldDiv">1</span></label><input type="range" min="1" max="20" value="1" id="pixelHoldDiv"></div>
+    <div class="slider-group"><label>Capture fps <span class="val" id="v_captureFps">30</span></label><input type="range" min="1" max="30" value="30" id="captureFps"></div>
+    <h3>Hold Divisor</h3>
+    <div class="inline-row"><span>Time (us) </span><input class="number-input" id="holdTimeUs" value="200000" min="1000" max="5000000"><span class="val" id="v_holdTimeUs">200000</span></div>
+    <div class="slider-group"><label>Hold Buffer (frames) <span class="val" id="v_holdBuffer">3</span></label><input type="range" min="1" max="30" value="3" id="holdBuffer"></div>
+    <div class="slider-group"><label>Bitcrusher <span class="val" id="v_bitcrusher">0</span></label><input type="range" min="0" max="100" value="0" id="bitcrusher"></div>
+    <div class="slider-group"><label>Simplifier <span class="val" id="v_simplifier">0</span></label><input type="range" min="0" max="100" value="0" id="simplifier"></div>
+    <div class="slider-group"><label>Curves <span class="val" id="v_curves">0</span></label><input type="range" min="-100" max="100" value="0" id="curves"></div>
+    <div class="slider-group"><label>ROYGBIV Shift <span class="val" id="v_roygbiv">0</span></label><input type="range" min="0" max="100" value="0" id="roygbiv"></div>
+    <h3>Keyframe Engine</h3>
+    <div class="slider-group"><label>Keyframer sensitivity <span class="val" id="v_keyframer">50</span></label><input type="range" min="0" max="100" value="50" id="keyframer"></div>
+    <div class="slider-group"><label>Guesser <span class="val" id="v_guesser">0</span></label><input type="range" min="0" max="100" value="0" id="guesser"></div>
+    <div class="slider-group"><label>Smoothener <span class="val" id="v_smoothener">0</span></label><input type="range" min="0" max="100" value="0" id="smoothener"></div>
+    <div class="slider-group"><label>Keyframe Hold Div <span class="val" id="v_kfHoldDiv">1</span></label><input type="range" min="1" max="60" value="1" id="kfHoldDiv"></div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="center-block">
+    <div class="canvas-frame"><canvas id="outputCanvas" width="640" height="360"></canvas><div class="mode-tag" id="modeIndicator">NORMAL</div></div>
+    <div class="mode-selector">
+      <button class="active-mode" data-mode="normal">Normal</button>
+      <button data-mode="changedKeyframes">Changed KF</button>
+      <button data-mode="keyframesRed">Keyframes (red)</button>
+      <button data-mode="topology">Topology</button>
+      <button data-mode="topalagy">Topalagy</button>
+      <button data-mode="robertology">Robertology</button>
+      <button data-mode="audioReactive">Audio Reactive</button>
+      <button data-mode="datamosh">Datamosh</button>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="panel" id="rightPanel">
+    <h3>Channel & Interlace</h3>
+    <select id="channelMode"><option value="A">Channel A only</option><option value="B">Channel B only</option><option value="interlaceAB">Interlace A/B</option></select>
+    <h3>RF Antenna</h3>
+    <div class="slider-group"><label>RF Noise <span class="val" id="v_rfNoise">0</span></label><input type="range" min="0" max="100" value="0" id="rfNoise"></div>
+    <div class="slider-group"><label>Signal Strength <span class="val" id="v_signalStrength">100</span></label><input type="range" min="0" max="100" value="100" id="signalStrength"></div>
+    <div class="slider-group"><label>Ghost Intensity <span class="val" id="v_ghostIntensity">0</span></label><input type="range" min="0" max="100" value="0" id="ghostIntensity"></div>
+    <div class="slider-group"><label>Ghost Delay (frames) <span class="val" id="v_ghostDelay">8</span></label><input type="range" min="1" max="30" value="8" id="ghostDelay"></div>
+    <div class="slider-group"><label>Frequency Offset <span class="val" id="v_freqOffset">0</span></label><input type="range" min="0" max="100" value="0" id="freqOffset"></div>
+    <div class="slider-group"><label>Freq Changer Amt <span class="val" id="v_freqChanger">0</span></label><input type="range" min="0" max="100" value="0" id="freqChanger"></div>
+    <select id="freqModeSelect"><option value="graph">graph</option><option value="free">free</option><option value="curve">curve</option><option value="scroll">scroll</option><option value="time">time</option><option value="bytebeat">bytebeat</option></select>
+    <select id="tvStandard"><option value="ntsc">NTSC</option><option value="pal">PAL</option><option value="secam">SECAM</option></select>
+    <div class="slider-group" id="tintGroup"><label>Tint <span class="val" id="v_tint">0</span></label><input type="range" min="-100" max="100" value="0" id="tint"></div>
+    <div class="slider-group"><label>Retarded Delay <span class="val" id="v_retardedDelay">0</span></label><input type="range" min="0" max="100" value="0" id="retardedDelay"></div>
+    <h3>Datamosh</h3>
+    <div class="slider-group"><label>Moshed frame freeze <span class="val" id="v_datamoshFreeze">0</span></label><input type="range" min="0" max="100" value="0" id="datamoshFreeze"></div>
+    <h3>Hack / Inject</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:4px;">
+      <button class="btn-hack" id="hackBitflip">Random Bitflip</button>
+      <button class="btn-hack" id="hackSyncLoss">Sync Loss</button>
+      <button class="btn-hack" id="hackColorShift">Color Shift</button>
+      <button class="btn-hack" id="hackDropout">Signal Dropout</button>
+    </div>
+    <h3>Wacky Modifiers</h3>
+    <div class="slider-group"><label>This <span class="val" id="v_thisSlider">0</span></label><input type="range" min="0" max="100" value="0" id="thisSlider"></div>
+    <div class="slider-group"><label>That <span class="val" id="v_thatSlider">0</span></label><input type="range" min="0" max="100" value="0" id="thatSlider"></div>
+    <div class="slider-group"><label>Data <span class="val" id="v_dataSlider">0</span></label><input type="range" min="0" max="100" value="0" id="dataSlider"></div>
+    <div class="slider-group"><label>TV (interlace) <span class="val" id="v_tvSlider">0</span></label><input type="range" min="0" max="100" value="0" id="tvSlider"></div>
+    <div class="slider-group"><label>Yes <span class="val" id="v_yesSlider">0</span></label><input type="range" min="0" max="100" value="0" id="yesSlider"></div>
+    <div class="slider-group"><label>Audio Amplitude <span class="val" id="v_audioSlider">0</span></label><input type="range" min="0" max="100" value="0" id="audioSlider"></div>
+    <div class="slider-group"><label>Video (macroblock) <span class="val" id="v_videoSlider">0</span></label><input type="range" min="0" max="100" value="0" id="videoSlider"></div>
+    <div class="slider-group"><label>GIF <span class="val" id="v_gifSlider">0</span></label><input type="range" min="0" max="100" value="0" id="gifSlider"></div>
+    <div class="slider-group"><label>IMG <span class="val" id="v_imgSlider">0</span></label><input type="range" min="0" max="100" value="0" id="imgSlider"></div>
+    <div class="slider-group"><label>BB <span class="val" id="v_bbSlider">0</span></label><input type="range" min="0" max="100" value="0" id="bbSlider"></div>
+    <div class="slider-group"><label>TXT <span class="val" id="v_txtSlider">0</span></label><input type="range" min="0" max="100" value="0" id="txtSlider"></div>
+    <div class="slider-group"><label>ETC <span class="val" id="v_etcSlider">0</span></label><input type="range" min="0" max="100" value="0" id="etcSlider"></div>
+  </div>
+</div>
+
+<video id="videoA" muted loop playsinline crossorigin="anonymous"></video>
+<video id="videoB" muted loop playsinline crossorigin="anonymous" autoplay></video>
+
+<script>
+(function() {
+  // ── DOM refs ──
+  const canvas = document.getElementById('outputCanvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const modeIndicator = document.getElementById('modeIndicator');
+  const startOverlay = document.getElementById('startOverlay');
+  const videoA = document.getElementById('videoA');
+  const videoB = document.getElementById('videoB');
+  const recordBtn = document.getElementById('recordBtn');
+
+  let W = 640, H = 360;
+  let frameCount = 0;
+  let currentMode = 'normal';
+  let hlsA = null, hlsB = null;
+  let streamB = null;
+  let audioCtx = null, audioAnalyser = null, audioDataArray = null, audioSource = null;
+  let audioInitialized = false;
+
+  // Audio buffer for audio reactive mode
+  const AUDIO_BUFFER_SIZE = 65536;
+  let audioCircularBuffer = new Float32Array(AUDIO_BUFFER_SIZE);
+  let audioBufferWriteIdx = 0;
+  let audioSampleRate = 44100;
+
+  let prevImageData = null;
+  let ghostBuffer = [];
+  let keyframeBuffer = [];
+  const MAX_KF_BUFFER = 12;
+  let currentKeyframe = null;
+  let keyframeHoldImage = null, keyframeHoldCounter = 0;
+  let smoothTransitionCounter = 0, smoothSteps = 0;
+  let prevKeyframeForSmooth = null;
+  let frozenSnapshot = null, frozenFrameCounter = 0;
+  let autoOffsetX = 0, autoOffsetY = 0;
+  let bytebeatCounter = 0;
+  let holdTimerUs = 0, holdBufferRemaining = 0;
+  let heldFrame = null;
+  let datamoshFreezeFrame = null, datamoshLastKeyframe = null;
+  let captureCounter = 0, captureInterval = 1;
+  let recording = false, mediaRecorder = null, recordedChunks = [];
+
+  // Slider values cache
+  const sliderValues = {};
+  const allSliderIds = [
+    'pixelOffsetX','pixelOffsetY','pixelHoldDiv','captureFps','holdBuffer','bitcrusher','simplifier','curves','roygbiv',
+    'keyframer','guesser','smoothener','kfHoldDiv','rfNoise','signalStrength','ghostIntensity','ghostDelay',
+    'freqOffset','freqChanger','tint','retardedDelay','thisSlider','thatSlider','dataSlider','tvSlider','yesSlider',
+    'audioSlider','videoSlider','gifSlider','imgSlider','bbSlider','txtSlider','etcSlider','datamoshFreeze'
+  ];
+
+  function updateValDisplay(id, val) {
+    const el = document.getElementById('v_' + id);
+    if (el) el.textContent = Math.round(val);
+  }
+
+  allSliderIds.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      sliderValues[id] = parseFloat(el.value) || 0;
+      el.addEventListener('input', () => { sliderValues[id] = parseFloat(el.value); updateValDisplay(id, sliderValues[id]); });
+      updateValDisplay(id, sliderValues[id]);
+    }
+  });
+
+  const holdTimeUsInput = document.getElementById('holdTimeUs');
+  let holdTimeUs = parseInt(holdTimeUsInput.value) || 200000;
+  holdTimeUsInput.addEventListener('change', () => {
+    holdTimeUs = Math.max(1000, parseInt(holdTimeUsInput.value) || 200000);
+    document.getElementById('v_holdTimeUs').textContent = holdTimeUs;
+  });
+
+  let freqChangerMode = document.getElementById('freqModeSelect').value;
+  document.getElementById('freqModeSelect').addEventListener('change', e => freqChangerMode = e.target.value);
+
+  const tvStandardSelect = document.getElementById('tvStandard');
+  const tintGroup = document.getElementById('tintGroup');
+  function updateTintVisibility() { tintGroup.style.display = tvStandardSelect.value === 'ntsc' ? 'block' : 'none'; }
+  tvStandardSelect.addEventListener('change', updateTintVisibility);
+  updateTintVisibility();
+
+  // Viewing modes
+  const modeButtons = document.querySelectorAll('.mode-selector button');
+  modeButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentMode = btn.dataset.mode;
+      modeButtons.forEach(b => b.classList.remove('active-mode'));
+      btn.classList.add('active-mode');
+      modeIndicator.textContent = currentMode.toUpperCase();
+      modeIndicator.classList.add('active');
+      setTimeout(() => modeIndicator.classList.remove('active'), 2000);
+    });
+  });
+
+  // Audio init
+  function initAudio() {
+    if (audioInitialized) return;
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      audioAnalyser = audioCtx.createAnalyser();
+      audioAnalyser.fftSize = 64;
+      audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+      audioSource = audioCtx.createMediaElementSource(videoA);
+      audioSource.connect(audioAnalyser);
+      audioAnalyser.connect(audioCtx.destination);
+      audioInitialized = true;
+      videoA.muted = false;
+      audioSampleRate = audioCtx.sampleRate;
+    } catch(e) { console.log('Audio init failed.'); }
+  }
+
+  function getAudioLevel() {
+    if (!audioInitialized || !audioAnalyser) return 0;
+    audioAnalyser.getByteFrequencyData(audioDataArray);
+    let sum = 0;
+    for (let i = 0; i < audioDataArray.length; i++) sum += audioDataArray[i];
+    return sum / audioDataArray.length / 255;
+  }
+
+  // Fill audio circular buffer from hidden audio source (we use a ScriptProcessorNode to capture samples)
+  let scriptProcessor = null;
+  function setupAudioCapture() {
+    if (!audioCtx) return;
+    scriptProcessor = audioCtx.createScriptProcessor(2048, 1, 1);
+    scriptProcessor.onaudioprocess = (e) => {
+      const input = e.inputBuffer.getChannelData(0);
+      for (let i = 0; i < input.length; i++) {
+        audioCircularBuffer[audioBufferWriteIdx] = input[i];
+        audioBufferWriteIdx = (audioBufferWriteIdx + 1) % AUDIO_BUFFER_SIZE;
+      }
+    };
+    audioSource.connect(scriptProcessor);
+    scriptProcessor.connect(audioCtx.destination); // needed to keep the node alive
+  }
+
+  // Stream loading
+  function loadStreamA(url) {
+    if (hlsA) { hlsA.destroy(); hlsA = null; }
+    if (Hls.isSupported()) {
+      hlsA = new Hls();
+      hlsA.loadSource(url);
+      hlsA.attachMedia(videoA);
+    } else if (videoA.canPlayType('application/vnd.apple.mpegurl')) { videoA.src = url; }
+  }
+  function loadStreamB(url) {
+    if (streamB) { if (streamB.getTracks) streamB.getTracks().forEach(t=>t.stop()); streamB = null; }
+    if (url === 'webcam') {
+      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 } }).then(s => {
+        streamB = s;
+        videoB.srcObject = s;
+        videoB.play();
+      });
+      return;
+    }
+    if (hlsB) { hlsB.destroy(); hlsB = null; }
+    if (Hls.isSupported()) {
+      hlsB = new Hls();
+      hlsB.loadSource(url);
+      hlsB.attachMedia(videoB);
+    } else if (videoB.canPlayType('application/vnd.apple.mpegurl')) { videoB.src = url; }
+  }
+
+  document.getElementById('loadStreamBtnA').addEventListener('click', () => loadStreamA(document.getElementById('m3uUrlA').value.trim()));
+  document.getElementById('loadStreamBtnB').addEventListener('click', () => loadStreamB(document.getElementById('m3uUrlB').value.trim()));
+  loadStreamA(document.getElementById('m3uUrlA').value.trim());
+
+  videoA.addEventListener('loadedmetadata', () => {
+    W = 640; H = Math.round(W / (videoA.videoWidth / videoA.videoHeight));
+    canvas.width = W; canvas.height = H;
+  });
+
+  // ── Effect functions ──
+  function shiftHue(r,g,b,deg) { const [h,s,l] = rgbToHsl(r,g,b); return hslToRgb((h+deg)%360, s, l); }
+  function rgbToHsl(r,g,b) {
+    r/=255;g/=255;b/=255; const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+    let h=0,s=0,l=(mx+mn)/2;
+    if(mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn);
+      switch(mx){ case r: h=((g-b)/d+(g<b?6:0))/6; break; case g: h=((b-r)/d+2)/6; break; case b: h=((r-g)/d+4)/6; break; } }
+    return [h*360,s,l];
+  }
+  function hslToRgb(h,s,l) {
+    h/=360; let r,g,b; if(s===0){r=g=b=l;} else {
+      const hue2rgb=(p,q,t)=>{ if(t<0)t+=1; if(t>1)t-=1; if(t<1/6)return p+(q-p)*6*t; if(t<1/2)return q; if(t<2/3)return p+(q-p)*(2/3-t)*6; return p; };
+      const q=l<0.5?l*(1+s):l+s-l*s, p=2*l-q;
+      r=hue2rgb(p,q,h+1/3); g=hue2rgb(p,q,h); b=hue2rgb(p,q,h-1/3);
+    }
+    return [Math.round(r*255),Math.round(g*255),Math.round(b*255)];
+  }
+
+  function applyPixelHoldDivRecursive(d, w, h, div) {
+    if(div<=1) return;
+    const total = w*h;
+    const indices = Array.from({length:total},(_,i)=>i);
+    function recur(arr) {
+      if(arr.length<=div) return arr;
+      const kept=[], skipped=[];
+      for(let i=0;i<arr.length;i++) if(i%div===0) kept.push(arr[i]); else skipped.push(arr[i]);
+      return [...kept, ...recur(skipped)];
+    }
+    const newOrder = recur(indices);
+    const copy = new Uint8ClampedArray(d);
+    for(let i=0;i<total;i++) {
+      const si=newOrder[i]*4, di=i*4;
+      d[di]=copy[si]; d[di+1]=copy[si+1]; d[di+2]=copy[si+2];
+    }
+  }
+
+  function applyPixelOffset1D(d, w, h, offX, offY) {
+    if(offX===0 && offY===0) return;
+    const total = w*h;
+    const copy = new Uint8ClampedArray(d);
+    const offset = offY*w + offX;
+    const wrapped = ((offset%total)+total)%total;
+    for(let i=0;i<total;i++) {
+      const si=((i+wrapped)%total+total)%total*4, di=i*4;
+      d[di]=copy[si]; d[di+1]=copy[si+1]; d[di+2]=copy[si+2];
+    }
+  }
+
+  function applyBitcrusher(d, amount) { if(amount<=0) return; const bits=Math.max(1,Math.floor(8-amount*0.07)); const mask=(0xFF>>bits)<<bits; for(let i=0;i<d.length;i+=4){ d[i]&=mask; d[i+1]&=mask; d[i+2]&=mask; } }
+  function applySimplifier(d, w, h, amount) { if(amount<=0) return; const bs=Math.max(2,Math.floor(amount*0.3)); for(let by=0;by<h;by+=bs){ const bh=Math.min(bs,h-by); for(let bx=0;bx<w;bx+=bs){ const bw=Math.min(bs,w-bx); let sr=0,sg=0,sb=0,cnt=0; for(let y=by;y<by+bh;y++) for(let x=bx;x<bx+bw;x++){ const i=(y*w+x)*4; sr+=d[i];sg+=d[i+1];sb+=d[i+2];cnt++; } const ar=sr/cnt, ag=sg/cnt, ab=sb/cnt; for(let y=by;y<by+bh;y++) for(let x=bx;x<bx+bw;x++){ const i=(y*w+x)*4; d[i]=ar; d[i+1]=ag; d[i+2]=ab; } } } }
+  function applyCurves(d, amount) { if(amount===0) return; const gamma=1+amount/50; for(let i=0;i<d.length;i+=4) for(let c=0;c<3;c++){ let v=d[i+c]/255; v=Math.pow(v,gamma); d[i+c]=Math.min(255,Math.max(0,v*255)); } }
+  function applyROYGBIV(d, w, amount) { if(amount<=0) return; for(let y=0;y<H;y++) for(let x=0;x<w;x++){ const i=(y*w+x)*4; const hueShift=(x/w)*amount*3.6; const [r,g,b]=[d[i],d[i+1],d[i+2]]; const [hr,hg,hb]=shiftHue(r,g,b,hueShift); const blend=amount/100; d[i]=r*(1-blend)+hr*blend; d[i+1]=g*(1-blend)+hg*blend; d[i+2]=b*(1-blend)+hb*blend; } }
+  function applyThis(d,w,h,amount){ if(amount<=0)return; const shift=Math.floor(amount*0.6); for(let y=0;y<h;y++){ const rowShift=Math.floor(Math.sin(y*0.2+frameCount*0.3)*shift); const rs=y*w*4; const row=new Uint8ClampedArray(w*4); for(let x=0;x<w*4;x++) row[x]=d[rs+x]; for(let x=0;x<w;x++){ const sx=((x+rowShift)%w+w)%w; d[rs+x*4]=row[sx*4]; d[rs+x*4+1]=row[sx*4+1]; d[rs+x*4+2]=row[sx*4+2]; } } }
+  function applyThat(d,w,h,amount){ if(amount<=0)return; const shift=Math.floor(amount*0.7); for(let x=0;x<w;x++){ const colShift=Math.floor(Math.cos(x*0.15+frameCount*0.25)*shift); const col=new Uint8ClampedArray(h*4); for(let y=0;y<h;y++){ const si=(y*w+x)*4; col[y*4]=d[si]; col[y*4+1]=d[si+1]; col[y*4+2]=d[si+2]; } for(let y=0;y<h;y++){ const sy=((y+colShift)%h+h)%h; const di=(y*w+x)*4; d[di]=col[sy*4]; d[di+1]=col[sy*4+1]; d[di+2]=col[sy*4+2]; } } }
+  function applyData(d, amount){ if(amount<=0)return; const prob=amount/200; for(let i=0;i<d.length;i+=4) if(Math.random()<prob){ const bit=1<<Math.floor(Math.random()*8); d[i]^=bit; d[i+1]^=bit; d[i+2]^=bit; } }
+  function applyTVInterlace(d,w,h,amount,prev){ if(amount<=0||!prev)return; const pd=prev.data; const blend=amount/100; const fieldToggle=frameCount%2===0; for(let y=0;y<h;y++){ const useCurrent = (fieldToggle && y%2===1) || (!fieldToggle && y%2===0); if(!useCurrent) for(let x=0;x<w;x++){ const i=(y*w+x)*4; d[i]=d[i]*(1-blend)+pd[i]*blend; d[i+1]=d[i+1]*(1-blend)+pd[i+1]*blend; d[i+2]=d[i+2]*(1-blend)+pd[i+2]*blend; } } }
+  function applyRetardedDelay(d, w, h, amount) {
+    if(amount<=0) return;
+    const maxDelay = Math.floor(amount * 0.5); // in frames (approx)
+    const cx = w/2, cy = h/2;
+    const copy = new Uint8ClampedArray(d);
+    for(let y=0; y<h; y++) {
+      for(let x=0; x<w; x++) {
+        const dx = x - cx, dy = y - cy;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        const delay = Math.floor(dist / (Math.max(1,amount*0.3))); // map distance to delay
+        const frameIdx = ghostBuffer.length - Math.min(delay, ghostBuffer.length);
+        if(frameIdx >= 0 && frameIdx < ghostBuffer.length) {
+          const srcData = ghostBuffer[frameIdx].data;
+          const i = (y*w + x)*4;
+          d[i] = srcData[i]; d[i+1] = srcData[i+1]; d[i+2] = srcData[i+2];
+        }
+      }
+    }
+  }
+
+  function applyRFSim(d,w,h,noise,strength,ghostIntensity,ghostDelay,freqOffset,standard,tint){
+    const str=strength/100;
+    for(let i=0;i<d.length;i+=4){ d[i]=Math.min(255,Math.max(0,d[i]*str+(Math.random()-0.5)*noise*2.55)); d[i+1]=Math.min(255,Math.max(0,d[i+1]*str+(Math.random()-0.5)*noise*2.55)); d[i+2]=Math.min(255,Math.max(0,d[i+2]*str+(Math.random()-0.5)*noise*2.55)); }
+    if(ghostIntensity>0 && ghostBuffer.length>=ghostDelay){ const gd=ghostBuffer[ghostBuffer.length-ghostDelay].data; const gb=ghostIntensity/100; for(let i=0;i<d.length;i+=4){ d[i]=d[i]*(1-gb)+gd[i]*gb; d[i+1]=d[i+1]*(1-gb)+gd[i+1]*gb; d[i+2]=d[i+2]*(1-gb)+gd[i+2]*gb; } }
+    if(freqOffset>0){ const t=performance.now()/1000; const hueShift=Math.sin(t*2.5)*freqOffset*0.6; for(let i=0;i<d.length;i+=4){ const [r,g,b]=[d[i],d[i+1],d[i+2]]; const [hr,hg,hb]=shiftHue(r,g,b,hueShift); const blend=freqOffset/150; d[i]=r*(1-blend)+hr*blend; d[i+1]=g*(1-blend)+hg*blend; d[i+2]=b*(1-blend)+hb*blend; } }
+    if(standard==='ntsc' && tint!==0) for(let i=0;i<d.length;i+=4){ const [r,g,b]=[d[i],d[i+1],d[i+2]]; const [tr,tg,tb]=shiftHue(r,g,b,tint); d[i]=tr; d[i+1]=tg; d[i+2]=tb; }
+  }
+  function applyYes(d,amount){ if(amount<=0)return; const pulse=Math.sin(frameCount*0.3)*0.5+0.5; const boost=amount*pulse; for(let i=0;i<d.length;i+=4){ d[i+1]=Math.min(255,d[i+1]+boost); if(amount>60 && Math.random()<0.02){ d[i]=0; d[i+1]=255; d[i+2]=0; } } }
+  function applyVideoMacroblock(d,w,h,amount){ if(amount<=0)return; const bs=Math.max(2,Math.floor(amount*0.4)); for(let by=0;by<h;by+=bs){ const bh=Math.min(bs,h-by); for(let bx=0;bx<w;bx+=bs){ const bw=Math.min(bs,w-bx); let sr=0,sg=0,sb=0,cnt=0; for(let y=by;y<by+bh;y++) for(let x=bx;x<bx+bw;x++){ const i=(y*w+x)*4; sr+=d[i]; sg+=d[i+1]; sb+=d[i+2]; cnt++; } const ar=sr/cnt, ag=sg/cnt, ab=sb/cnt; for(let y=by;y<by+bh;y++) for(let x=bx;x<bx+bw;x++){ const i=(y*w+x)*4; d[i]=ar; d[i+1]=ag; d[i+2]=ab; } } } }
+  function applyGIF(d,amount){ if(amount<=0)return; const lvls=Math.max(2,Math.floor(256-amount*2.5)); const step=256/lvls; for(let i=0;i<d.length;i+=4){ d[i]=Math.floor(d[i]/step)*step; d[i+1]=Math.floor(d[i+1]/step)*step; d[i+2]=Math.floor(d[i+2]/step)*step; } }
+  function applyIMG(d,amount){ if(amount<=0){ frozenSnapshot=null; return; } if(!frozenSnapshot || frozenFrameCounter%30===0) frozenSnapshot=new ImageData(new Uint8ClampedArray(d),W,H); frozenFrameCounter++; const fd=frozenSnapshot.data; const blend=Math.min(1,amount/100); for(let i=0;i<d.length;i+=4){ d[i]=d[i]*(1-blend)+fd[i]*blend; d[i+1]=d[i+1]*(1-blend)+fd[i+1]*blend; d[i+2]=d[i+2]*(1-blend)+fd[i+2]*blend; } }
+  function applyBB(d,amount){ if(amount<=0)return; for(let i=0;i<d.length;i+=4) if(Math.random()<amount/100){ const bit=1<<Math.floor(Math.random()*8); d[i]^=bit; d[i+1]^=bit; d[i+2]^=bit; } }
+  function applyTXT(d,w,h,amount){ if(amount<=0)return; const chars='@%#*+=-:. '; const bw=8,bh=12; const op=amount/100; for(let by=0;by<h;by+=bh) for(let bx=0;bx<w;bx+=bw){ let sum=0,cnt=0; const my=Math.min(by+bh,h), mx=Math.min(bx+bw,w); for(let y=by;y<my;y++) for(let x=bx;x<mx;x++){ const i=(y*w+x)*4; sum+=(d[i]+d[i+1]+d[i+2])/3; cnt++; } const avg=sum/cnt; const ci=Math.floor((avg/255)*(chars.length-1)); const cb=255-avg; for(let y=by;y<my;y++) for(let x=bx;x<mx;x++){ const i=(y*w+x)*4; d[i]=d[i]*(1-op)+cb*op; d[i+1]=d[i+1]*(1-op)+cb*op; d[i+2]=d[i+2]*(1-op)+cb*op; } } }
+  function applyETC(d,amount){ if(amount<=0)return; if(amount<40){ for(let i=0;i<d.length;i+=4) if(Math.random()<amount/200){ d[i]^=0xFF; d[i+1]^=0xFF; d[i+2]^=0xFF; } } else { const cx=W/2,cy=H/2,r=Math.floor(amount*0.8); for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const dx=x-cx,dy=y-cy; if(Math.sqrt(dx*dx+dy*dy)<r){ const i=(y*W+x)*4; const tmp=d[i]; d[i]=d[i+2]; d[i+2]=tmp; } } } }
+
+  // Audio reactive: generate image from audio buffer only
+  function generateAudioReactiveImage() {
+    const imgData = ctx.createImageData(W, H);
+    const d = imgData.data;
+    const totalPixels = W * H;
+    const readIdx = (audioBufferWriteIdx - totalPixels + AUDIO_BUFFER_SIZE) % AUDIO_BUFFER_SIZE;
+    for (let i = 0; i < totalPixels; i++) {
+      const sampleIdx = (readIdx + i) % AUDIO_BUFFER_SIZE;
+      const sample = audioCircularBuffer[sampleIdx];
+      const gray = Math.floor((sample * 0.5 + 0.5) * 255);
+      const hue = ((sample + 1) / 2) * 360;
+      const [r,g,b] = hslToRgb(hue, 0.8, 0.5 + Math.abs(sample) * 0.5);
+      const di = i * 4;
+      d[di] = r; d[di+1] = g; d[di+2] = b; d[di+3] = 255;
+    }
+    return imgData;
+  }
+
+  // Hack injections
+  function injectBitflip(d) { for(let i=0;i<d.length;i+=4) if(Math.random()<0.05) { const bit=1<<Math.floor(Math.random()*8); d[i]^=bit; d[i+1]^=bit; d[i+2]^=bit; } }
+  function injectSyncLoss(d) { const offset=Math.floor(Math.random()*W*0.3); const copy=new Uint8ClampedArray(d); const total=W*H; for(let i=0;i<total;i++){ const si=((i+offset)%total+total)%total*4, di=i*4; d[di]=copy[si]; d[di+1]=copy[si+1]; d[di+2]=copy[si+2]; } }
+  function injectColorShift(d) { for(let i=0;i<d.length;i+=4){ const tmp=d[i]; d[i]=d[i+1]; d[i+1]=d[i+2]; d[i+2]=tmp; } }
+  function injectDropout(d) { for(let i=0;i<d.length;i+=4) if(Math.random()<0.2) d[i]=d[i+1]=d[i+2]=0; }
+
+  // Recording
+  function startRecording() {
+    const stream = canvas.captureStream(30);
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+    mediaRecorder.ondataavailable = e => recordedChunks.push(e.data);
+    mediaRecorder.onstop = () => {
+      const blob = new Blob(recordedChunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'tv_corruption.webm'; a.click();
+      recordedChunks = [];
+    };
+    mediaRecorder.start();
+    recording = true;
+    recordBtn.textContent = '■ STOP';
+    recordBtn.classList.add('recording');
+  }
+  function stopRecording() {
+    if (mediaRecorder && recording) {
+      mediaRecorder.stop();
+      recording = false;
+      recordBtn.textContent = '● REC';
+      recordBtn.classList.remove('recording');
+    }
+  }
+  recordBtn.addEventListener('click', () => recording ? stopRecording() : startRecording());
+
+  // Main processing loop
+  function processFrame() {
+    if (videoA.readyState < 2) { requestAnimationFrame(processFrame); return; }
+    frameCount++;
+    bytebeatCounter++;
+
+    // Capture rate control
+    const capFps = Math.round(sliderValues['captureFps'] || 30);
+    const skipFrames = Math.max(1, Math.round(30 / capFps));
+    captureCounter++;
+    if (captureCounter >= skipFrames) {
+      captureCounter = 0;
+
+      let sourceImg;
+      if (currentMode === 'audioReactive') {
+        // Audio reactive mode generates image from audio
+        sourceImg = generateAudioReactiveImage();
+      } else {
+        // Capture from video channels
+        const offCanvas = document.createElement('canvas'); offCanvas.width=W; offCanvas.height=H;
+        const offCtx = offCanvas.getContext('2d');
+        const chMode = document.getElementById('channelMode').value;
+        if (chMode === 'A' || !videoB.srcObject && !videoB.src) {
+          offCtx.drawImage(videoA, 0, 0, W, H);
+          sourceImg = offCtx.getImageData(0,0,W,H);
+        } else if (chMode === 'B') {
+          offCtx.drawImage(videoB, 0, 0, W, H);
+          sourceImg = offCtx.getImageData(0,0,W,H);
+        } else if (chMode === 'interlaceAB') {
+          offCtx.drawImage(videoA, 0, 0, W, H);
+          const imgA = offCtx.getImageData(0,0,W,H);
+          offCtx.drawImage(videoB, 0, 0, W, H);
+          const imgB = offCtx.getImageData(0,0,W,H);
+          const dA = imgA.data, dB = imgB.data;
+          for (let y=0; y<H; y++) {
+            if (y%2===0) {
+              for (let x=0; x<W; x++) {
+                const i = (y*W+x)*4;
+                dB[i]=dA[i]; dB[i+1]=dA[i+1]; dB[i+2]=dA[i+2];
+              }
+            }
+          }
+          sourceImg = imgB;
+        }
+        if (!sourceImg) sourceImg = offCtx.getImageData(0,0,W,H);
+      }
+
+      let d = sourceImg.data.slice();
+
+      // Pixel array ops
+      const phd = Math.floor(sliderValues['pixelHoldDiv']||1);
+      if(phd>1) applyPixelHoldDivRecursive(d, W, H, phd);
+      const scrollDir = document.getElementById('scrollDir').value;
+      if(scrollDir==='right') autoOffsetX = (autoOffsetX+1)%W;
+      else if(scrollDir==='left') autoOffsetX = (autoOffsetX-1+W)%W;
+      else if(scrollDir==='down') autoOffsetY = (autoOffsetY+1)%H;
+      else if(scrollDir==='up') autoOffsetY = (autoOffsetY-1+H)%H;
+      const baseOffX = Math.floor(sliderValues['pixelOffsetX']||0);
+      const baseOffY = Math.floor(sliderValues['pixelOffsetY']||0);
+      const finalOffX = scrollDir==='none' ? baseOffX : (baseOffX+autoOffsetX)%W;
+      const finalOffY = scrollDir==='none' ? baseOffY : (baseOffY+autoOffsetY)%H;
+      applyPixelOffset1D(d, W, H, finalOffX, finalOffY);
+
+      applyBitcrusher(d, sliderValues['bitcrusher']||0);
+      applySimplifier(d, W, H, sliderValues['simplifier']||0);
+      applyCurves(d, sliderValues['curves']||0);
+      applyROYGBIV(d, W, sliderValues['roygbiv']||0);
+      applyThis(d, W, H, sliderValues['thisSlider']||0);
+      applyThat(d, W, H, sliderValues['thatSlider']||0);
+      applyData(d, sliderValues['dataSlider']||0);
+      applyTVInterlace(d, W, H, sliderValues['tvSlider']||0, prevImageData);
+      applyYes(d, sliderValues['yesSlider']||0);
+      const audioAmt = sliderValues['audioSlider']||0;
+      if(audioAmt>0){ const lvl=getAudioLevel(); for(let i=0;i<d.length;i+=4){ d[i]=Math.min(255,d[i]+lvl*audioAmt*40); d[i+1]=Math.min(255,d[i+1]+lvl*audioAmt*20); d[i+2]=Math.max(0,d[i+2]-lvl*audioAmt*30); } }
+      applyVideoMacroblock(d, W, H, sliderValues['videoSlider']||0);
+      applyGIF(d, sliderValues['gifSlider']||0);
+      applyIMG(d, sliderValues['imgSlider']||0);
+      applyBB(d, sliderValues['bbSlider']||0);
+      applyTXT(d, W, H, sliderValues['txtSlider']||0);
+      applyETC(d, sliderValues['etcSlider']||0);
+
+      // RF sim
+      const noise = sliderValues['rfNoise']||0;
+      const strength = sliderValues['signalStrength']||100;
+      const ghostIntensity = sliderValues['ghostIntensity']||0;
+      const ghostDelay = Math.floor(sliderValues['ghostDelay']||8);
+      let freqOffset = sliderValues['freqOffset']||0;
+      const freqChangerAmt = sliderValues['freqChanger']||0;
+      if(freqChangerAmt>0){ let mod=0; const t=performance.now()/1000; switch(freqChangerMode){ case 'graph': mod=Math.sin(t*2.3)*Math.cos(t*1.7)*freqChangerAmt; break; case 'free': mod=freqChangerAmt*0.8; break; case 'curve': mod=(1/(1+Math.exp(-Math.sin(t*1.5)*3)))*freqChangerAmt; break; case 'scroll': mod=((t*40)%freqChangerAmt)-freqChangerAmt/2; break; case 'time': mod=(new Date().getSeconds()/60)*freqChangerAmt; break; case 'bytebeat': const bb=bytebeatCounter*((bytebeatCounter>>12|bytebeatCounter>>8)&63&bytebeatCounter>>4); mod=(bb%100)/100*freqChangerAmt; break; } freqOffset=Math.max(0,Math.min(100,freqOffset+mod)); }
+      const standard = tvStandardSelect.value;
+      const tint = standard==='ntsc' ? (sliderValues['tint']||0) : 0;
+      applyRFSim(d, W, H, noise, strength, ghostIntensity, ghostDelay, freqOffset, standard, tint);
+      // Retarded delay
+      applyRetardedDelay(d, W, H, sliderValues['retardedDelay']||0);
+
+      // Ghost buffer
+      ghostBuffer.push(new ImageData(new Uint8ClampedArray(d), W, H));
+      if(ghostBuffer.length>60) ghostBuffer.shift();
+
+      // Keyframe detection
+      const keyframerSens = sliderValues['keyframer']||50;
+      const diffThreshold = (100 - keyframerSens)*2.55;
+      let isKeyframe = false;
+      if(currentKeyframe){
+        const kd = currentKeyframe.data;
+        let sumDiff=0;
+        for(let i=0;i<d.length;i+=4) sumDiff+=Math.abs(d[i]-kd[i])+Math.abs(d[i+1]-kd[i+1])+Math.abs(d[i+2]-kd[i+2]);
+        if(sumDiff/(W*H*3) > diffThreshold) isKeyframe = true;
+      } else isKeyframe = true;
+
+      if(isKeyframe){
+        const newKf = new ImageData(new Uint8ClampedArray(d), W, H);
+        keyframeBuffer.push({data:newKf, x:finalOffX, y:finalOffY, frame:frameCount});
+        if(keyframeBuffer.length>MAX_KF_BUFFER) keyframeBuffer.shift();
+        if(keyframeBuffer.length>=2){
+          const last = keyframeBuffer[keyframeBuffer.length-1];
+          const prev = keyframeBuffer[keyframeBuffer.length-2];
+          last.vx = last.x - prev.x; last.vy = last.y - prev.y;
+        }
+        prevKeyframeForSmooth = currentKeyframe ? new ImageData(new Uint8ClampedArray(currentKeyframe.data), W, H) : null;
+        currentKeyframe = newKf;
+        const kfHoldDiv = Math.max(1, Math.floor(sliderValues['kfHoldDiv']||1));
+        keyframeHoldCounter = kfHoldDiv;
+        keyframeHoldImage = new ImageData(new Uint8ClampedArray(d), W, H);
+        smoothSteps = Math.floor((sliderValues['smoothener']||0)*0.5);
+        smoothTransitionCounter = 0;
+      }
+
+      // Guesser
+      applyGuesser(d, W, H, sliderValues['guesser']||0);
+
+      // Smoothener interpolation
+      if(smoothSteps>0 && prevKeyframeForSmooth && currentKeyframe && smoothTransitionCounter < smoothSteps){
+        const blend = smoothTransitionCounter/smoothSteps;
+        const pkd = prevKeyframeForSmooth.data, kd = currentKeyframe.data;
+        for(let i=0;i<d.length;i+=4){
+          d[i] = pkd[i]*(1-blend) + kd[i]*blend;
+          d[i+1] = pkd[i+1]*(1-blend) + kd[i+1]*blend;
+          d[i+2] = pkd[i+2]*(1-blend) + kd[i+2]*blend;
+        }
+        smoothTransitionCounter++;
+      }
+
+      // Hold divisor timer
+      const holdBufferVal = Math.floor(sliderValues['holdBuffer']||1);
+      holdTimerUs += 16667;
+      if(holdTimerUs >= holdTimeUs){
+        holdTimerUs -= holdTimeUs;
+        holdBufferRemaining = holdBufferVal;
+        heldFrame = new ImageData(new Uint8ClampedArray(d), W, H);
+      }
+      if(holdBufferRemaining>0 && heldFrame){
+        d = new Uint8ClampedArray(heldFrame.data);
+        holdBufferRemaining--;
+      }
+
+      // Keyframe hold
+      if(keyframeHoldCounter>0 && keyframeHoldImage){
+        d = new Uint8ClampedArray(keyframeHoldImage.data);
+        keyframeHoldCounter--;
+      }
+
+      // Datamosh
+      const datamoshAmt = sliderValues['datamoshFreeze']||0;
+      if(datamoshAmt > 0 && currentMode === 'datamosh'){
+        if(!datamoshFreezeFrame){
+          datamoshFreezeFrame = new ImageData(new Uint8ClampedArray(d), W, H);
+          datamoshLastKeyframe = currentKeyframe ? new ImageData(new Uint8ClampedArray(currentKeyframe.data), W, H) : null;
+        }
+        if(datamoshFreezeFrame && datamoshLastKeyframe){
+          const freeze = datamoshFreezeFrame.data;
+          const kf = datamoshLastKeyframe.data;
+          const blend = datamoshAmt/100;
+          for(let i=0;i<d.length;i+=4){
+            const dr = Math.abs(d[i]-kf[i]), dg = Math.abs(d[i+1]-kf[i+1]), db = Math.abs(d[i+2]-kf[i+2]);
+            if(dr+dg+db > 40){
+              d[i] = d[i]*(1-blend) + freeze[i]*blend;
+              d[i+1] = d[i+1]*(1-blend) + freeze[i+1]*blend;
+              d[i+2] = d[i+2]*(1-blend) + freeze[i+2]*blend;
+            } else {
+              d[i] = freeze[i]; d[i+1] = freeze[i+1]; d[i+2] = freeze[i+2];
+            }
+          }
+        }
+      } else {
+        datamoshFreezeFrame = null;
+        datamoshLastKeyframe = null;
+      }
+
+      prevImageData = new ImageData(new Uint8ClampedArray(d), W, H);
+    }
+
+    // Viewing mode (use prevImageData if we didn't capture)
+    let displayData = prevImageData ? prevImageData.data : new Uint8ClampedArray(W*H*4);
+    let displayImage = new ImageData(new Uint8ClampedArray(displayData), W, H);
+
+    switch(currentMode){
+      case 'changedKeyframes':
+        displayImage = computeDiffWithKeyframe(displayImage.data, currentKeyframe); break;
+      case 'keyframesRed':
+        if(keyframeHoldImage){
+          const dd = displayImage.data;
+          for(let i=0;i<dd.length;i+=4){ dd[i]=Math.min(255,dd[i]*1.5); dd[i+1]*=0.5; dd[i+2]*=0.5; }
+        } else { const black = new ImageData(W,H); for(let i=0;i<black.data.length;i+=4) black.data[i+3]=255; displayImage = black; }
+        break;
+      case 'topology': displayImage = applyTopology(displayImage.data); break;
+      case 'topalagy': displayImage = applyTopalagy(applyTopology(displayImage.data)); break;
+      case 'robertology': displayImage = applyRobertology(displayImage.data, performance.now()/1000); break;
+      case 'audioReactive': break; // already generated
+      case 'datamosh': break;
+    }
+
+    ctx.putImageData(displayImage, 0, 0);
+    requestAnimationFrame(processFrame);
+  }
+
+  function applyGuesser(d,w,h,amount){ if(amount<=0||keyframeBuffer.length<2) return; const blend=amount/100; const lastKf=keyframeBuffer[keyframeBuffer.length-1]; const prevKf=keyframeBuffer[keyframeBuffer.length-2]; const vx=lastKf.x-prevKf.x, vy=lastKf.y-prevKf.y; const guessX=Math.round(lastKf.x+vx*blend), guessY=Math.round(lastKf.y+vy*blend); const copy=new Uint8ClampedArray(d); const total=w*h; const offset=guessY*w+guessX; const wrapped=((offset%total)+total)%total; for(let i=0;i<total;i++){ const si=((i+wrapped)%total+total)%total*4, di=i*4; d[di]=d[di]*(1-blend)+copy[si]*blend; d[di+1]=d[di+1]*(1-blend)+copy[si+1]*blend; d[di+2]=d[di+2]*(1-blend)+copy[si+2]*blend; } }
+
+  function computeDiffWithKeyframe(d, kfData){ const diff=new ImageData(W,H); const dd=diff.data; const kd=kfData?kfData.data:new Uint8ClampedArray(d.length); for(let i=0;i<d.length;i+=4){ const dr=Math.abs(d[i]-kd[i]), dg=Math.abs(d[i+1]-kd[i+1]), db=Math.abs(d[i+2]-kd[i+2]); if(dr+dg+db>30){ dd[i]=d[i]; dd[i+1]=d[i+1]; dd[i+2]=d[i+2]; dd[i+3]=255; } else { dd[i]=0; dd[i+1]=0; dd[i+2]=0; dd[i+3]=255; } } return diff; }
+  function applyTopology(d){ const grey=new Uint8ClampedArray(W*H); for(let i=0;i<d.length;i+=4) grey[i/4]=(d[i]+d[i+1]+d[i+2])/3; const edge=new ImageData(W,H); const ed=edge.data; for(let y=1;y<H-1;y++) for(let x=1;x<W-1;x++){ const idx=y*W+x; const gx=Math.abs(grey[(y-1)*W+x+1]+2*grey[y*W+x+1]+grey[(y+1)*W+x+1]-grey[(y-1)*W+x-1]-2*grey[y*W+x-1]-grey[(y+1)*W+x-1]); const gy=Math.abs(grey[(y+1)*W+x-1]+2*grey[(y+1)*W+x]+grey[(y+1)*W+x+1]-grey[(y-1)*W+x-1]-2*grey[(y-1)*W+x]-grey[(y-1)*W+x+1]); ed[idx*4]=ed[idx*4+1]=ed[idx*4+2]=Math.min(255,gx+gy); ed[idx*4+3]=255; } return edge; }
+  function applyTopalagy(topoData){ const d=topoData.data; const warp=new ImageData(W,H); const wd=warp.data; for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const i=(y*W+x)*4; const brightness=d[i]/255; const dispX=Math.floor(Math.sin(y*0.08+brightness*6)*brightness*25); const dispY=Math.floor(Math.cos(x*0.08+brightness*6)*brightness*25); const sx=Math.max(0,Math.min(W-1,x+dispX)); const sy=Math.max(0,Math.min(H-1,y+dispY)); const si=(sy*W+sx)*4; wd[i]=d[si]; wd[i+1]=d[si+1]; wd[i+2]=d[si+2]; wd[i+3]=255; } return warp; }
+  function applyRobertology(d,t){ const result=new ImageData(W,H); const rd=result.data; const cx=W/2,cy=H/2; for(let y=0;y<H;y++) for(let x=0;x<W;x++){ const i=(y*W+x)*4; const dx=x-cx,dy=y-cy; const dist=Math.sqrt(dx*dx+dy*dy); const angle=Math.atan2(dy,dx); const spiral=angle+dist*0.02+t*0.5; const sx=Math.floor(cx+Math.cos(spiral)*dist*(0.8+Math.sin(t*0.7+dist*0.03)*0.4)); const sy=Math.floor(cy+Math.sin(spiral)*dist*(0.8+Math.cos(t*0.6+dist*0.03)*0.4)); const sxClamp=Math.max(0,Math.min(W-1,sx)); const syClamp=Math.max(0,Math.min(H-1,sy)); const si=(syClamp*W+sxClamp)*4; const phaseShift=(t*2+dist*0.04)%(Math.PI*2); rd[i]=Math.min(255,d[si]*(0.5+0.5*Math.sin(phaseShift))); rd[i+1]=Math.min(255,d[si+2]*(0.5+0.5*Math.sin(phaseShift+2))); rd[i+2]=Math.min(255,d[si+1]*(0.5+0.5*Math.sin(phaseShift+4))); rd[i+3]=255; } return result; }
+
+  // Hack buttons
+  document.getElementById('hackBitflip').addEventListener('click', ()=>{ if(prevImageData) injectBitflip(prevImageData.data); });
+  document.getElementById('hackSyncLoss').addEventListener('click', ()=>{ if(prevImageData) injectSyncLoss(prevImageData.data); });
+  document.getElementById('hackColorShift').addEventListener('click', ()=>{ if(prevImageData) injectColorShift(prevImageData.data); });
+  document.getElementById('hackDropout').addEventListener('click', ()=>{ if(prevImageData) injectDropout(prevImageData.data); });
+
+  startOverlay.addEventListener('click', ()=>{
+    initAudio();
+    setupAudioCapture();
+    startOverlay.style.display='none';
+    videoA.play().catch(()=>{});
+    if(videoB.srcObject) videoB.play().catch(()=>{});
+    if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
+    requestAnimationFrame(processFrame);
+  });
+})();
+</script>
+</body>
+</html>
